@@ -1,38 +1,62 @@
-const express = require('express');
-const path = require('path');
+/* Socket Chat */
+const express       = require('express');
+const chat          = express();
+const path          = require('path');
+const server        = require('http').createServer(chat);
+const io            = require('socket.io')(server);
+const formatMessage = require('./utils/messages');
+const { userJoin, getCurrentUser, userLeave, getRoomUsers } = require('./utils/users');
 
-const app = express();
-const server = require('http').createServer(app);
-const io = require('socket.io')(server);
+// Ao acessar o endpoint localhost:3000 redireciona para a pasta chat 
+chat.use(express.static(path.join(__dirname, 'public')));
 
-// Configurações do front na pasta public e view em html
-app.use(express.static(path.join(__dirname, 'public')));
-app.set('views', path.join(__dirname, 'public'));
-app.engine('html', require('ejs').renderFile);
-app.set('view engine', 'html');
-
-// Response http da index.html
-app.use('', (req, res) => {
-    res.render('index.html');
-});
-
-let messages = [];
+const botName = 'Chat Bot'
 
 // Conectando no socket
 io.on('connection', socket => {
-    console.log(`Socket connected: ${socket.id}`)
 
-    // Emite mensagens antigas da variavel
-    socket.emit('previousMessages', messages);
+    //Entrar na sala
+    socket.on('joinRoom', ({ username, room }) => {
+        
+        const user = userJoin(socket.id, username, room);
 
-    // Ao executar evendo no front
-    socket.on('sendMessage', data => {
-        // Armazena dados na variavel
-        messages.push(data);
+        socket.join(user.room);
 
-        // Emite para todos conectados ao socket a mensagem recebida
-        socket.broadcast.emit('receivedMessage', data);
+        // Boas vindas
+        socket.emit('message', formatMessage(botName, 'Welcome to My Chat!'));
+        // Notificação entrada
+        socket.broadcast.to(user.room).emit('message', formatMessage(botName, `${user.username} has joined the chat`));    
+    
+        // Notiifica informações da sala
+        io.to(user.room).emit('roomUsers', {
+            room: user.room,
+            users: getRoomUsers(user.room)
+        });    
+    });
+   
+    // Ao executar evendo no front emite mensagem
+    socket.on('chatMessage', (msg) => {
+        const user = getCurrentUser(socket.id);
+
+        io.to(user.room).emit('message', formatMessage(user.username, msg));
     })
+
+    //Notificação Disconectar
+    socket.on('disconnect', () => {
+        const user = userLeave(socket.id);
+
+        if(user){
+            io.to(user.room).emit('message', formatMessage(botName, `${user.username} has left the chat`));
+        
+            // Notiifica informações da sala
+            io.to(user.room).emit('roomUsers', {
+                room: user.room,
+                users: getRoomUsers(user.room)
+            }); 
+        }
+        
+    });
+
 })
 
 server.listen(3000);
